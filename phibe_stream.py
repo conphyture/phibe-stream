@@ -8,7 +8,7 @@ from pylsl import StreamInfo, StreamOutlet
 import time, struct, argparse
 
 # retrieve MAC address
-parser = argparse.ArgumentParser(description='Stream heart rate of bluetooth BLE compatible devices using LSL.')
+parser = argparse.ArgumentParser(description='Stream phibe channels using LSL.')
 parser.add_argument("device_mac", help="MAC address of the MAC device")
 args = parser.parse_args()
 
@@ -17,16 +17,16 @@ last_bpm = 0
 last_rr = 0
 
 # will likely interpolate data if greater than 1Hz
-samplingrate = 16
+samplingrate = 100 
 
 # create LSL StreamOutlet
-print "creating LSL outlet for heart-rate, sampling rate:", samplingrate, "Hz"
-info_hr = StreamInfo('hr','hr',1,samplingrate,'float32','conphyturehr1337')
-outlet_hr = StreamOutlet(info_hr)
+print "creating LSL outlet for channel 1, sampling rate:", samplingrate, "Hz"
+info_c1 = StreamInfo('hr','hr',1,samplingrate,'float32','conphyture-phibe-c1')
+outlet_c1 = StreamOutlet(info_c1)
 
-print "creating LSL outlet for RR intervals, sampling rate:", samplingrate, "Hz"
-info_rr = StreamInfo('rr','rr',1,samplingrate,'float32','conphyturehr1337')
-outlet_rr = StreamOutlet(info_rr)
+print "creating LSL outlet for channel 2, sampling rate:", samplingrate, "Hz"
+info_c2 = StreamInfo('rr','rr',1,samplingrate,'float32','conphyture-phibe-c2')
+outlet_c2 = StreamOutlet(info_c2)
 
 class HRM(Peripheral):
     def __init__(self, addr):
@@ -72,8 +72,8 @@ if __name__=="__main__":
 
         while True:
             hrm.waitForNotifications(1./samplingrate)
-            outlet_hr.push_sample([last_bpm])
-            outlet_rr.push_sample([last_rr])
+            outlet_c1.push_sample([last_bpm])
+            outlet_c2.push_sample([last_rr])
 
     finally:
         if hrm:
