@@ -13,8 +13,8 @@ parser.add_argument("device_mac", help="MAC address of the MAC device")
 args = parser.parse_args()
 
 # ugly global variable go retrieve value from delegate
-last_bpm = 0
-last_rr = 0
+last_chan1 = 0
+last_chan2 = 0
 
 # will likely interpolate data if greater than 1Hz
 samplingrate = 100 
@@ -28,58 +28,99 @@ print "creating LSL outlet for channel 2, sampling rate:", samplingrate, "Hz"
 info_c2 = StreamInfo('rr','rr',1,samplingrate,'float32','conphyture-phibe-c2')
 outlet_c2 = StreamOutlet(info_c2)
 
-class HRM(Peripheral):
+class Board(Peripheral):
     def __init__(self, addr):
-        print "connecting to device", addr, " in random mode"
-        Peripheral.__init__(self, addr, addrType=ADDR_TYPE_RANDOM)
+        # list of channels
+        self.nbChans = 2
+        self.chan = []
+        # init channels
+        # TODO: numpy...
+        for i in range(self.nbChans):
+            self.chan.append([])
+        # current position
+        self.head = 0
+        self.leftover = ''
+
+        print "connecting to device", addr
+        Peripheral.__init__(self, addr)
         print "...connected"
 
+    def advanceHead(self):
+        self.head += 1
+        if self.head >= self.nbChans:
+            self.head = 0
+
+    def addData(self, cHandle,data):
+
+        
+       
+        # complete with previous values and reset
+        data = self.leftover + data
+
+        nb_bytes = len(data)
+
+        print "nb", nb_bytes
+        bytes_left = nb_bytes % 3
+        print "left", bytes_left
+        print "read", nb_bytes - bytes_left
+        for i in range(0, nb_bytes - bytes_left, 3):
+            dat = data[i:i+3]
+            self.chan[self.head].append(to32(dat))
+
+            print self.head,
+            for c in dat:
+                print "%#x" % ord(c),
+            print
+            
+            self.advanceHead()
+        # add cut to buffer
+        self.leftover = data[-bytes_left:]
+
+# takes a tab of 3 bytes, return int
+# (from OpenBCI python repo)
+def to32(packed):
+    unpacked = struct.unpack('3B', packed)
+    #3byte int in 2s compliment
+    if (unpacked[0] >= 127):
+      pre_fix = '\xFF'
+    else:
+      pre_fix = '\x00'
+    packed = pre_fix + packed
+    #unpack little endian(>) signed integer(i) (makes unpacking platform independent)
+    myInt = struct.unpack('>i', packed)[0]
+    return myInt
+
 if __name__=="__main__":
-    cccid = AssignedNumbers.client_characteristic_configuration
-    hrmid = AssignedNumbers.heart_rate
-    hrmmid = AssignedNumbers.heart_rate_measurement
-
-    hrm = None
     try:
-        hrm = HRM(args.device_mac)
 
-        service, = [s for s in hrm.getServices() if s.uuid==hrmid]
-        print "Got service"
-        ccc, = service.getCharacteristics(forUUID=str(hrmmid))
-        print "Got characteristic"
-        desc = hrm.getDescriptors(service.hndStart, service.hndEnd)
-        d, = [d for d in desc if d.uuid==cccid]
-        print "Got descriptor, writing init sequence"
-        hrm.writeCharacteristic(d.handle, '\1\0')
+        board = Board(args.device_mac)
+        # enable something??
+        board.writeCharacteristic(0x0025, '\1\0', False)  
 
         t0=time.time()
-        def print_hr(cHandle, data):
-            global last_bpm, last_rr
-            bpm = ord(data[1])
-            last_bpm = bpm
-            print "BPM:", bpm, "- time: %.2f"%(time.time()-t0),
-            # if retrieved data is longer, we got RR interval, take the first
-            if len(data) >= 4:
-                # UINT16 format
-                rr = struct.unpack('H', data[2:4])[0]
-                # units of RR interval is 1/1024 sec
-                rr = rr/1024.
-                last_rr = rr
-                print "- RR:", rr,
-            print ""
+        board.delegate.handleNotification = board.addData
 
-        hrm.delegate.handleNotification = print_hr
-
+        last_c1 = 0
+        last_c2 = 0
+ 
         while True:
-            hrm.waitForNotifications(1./samplingrate)
-            outlet_c1.push_sample([last_bpm])
-            outlet_c2.push_sample([last_rr])
-
+            board.waitForNotifications(1./samplingrate)
+            # ugly way to stream and free board current buffer
+            for c1 in board.chan[0]:
+                outlet_c1.push_sample([c1])
+                last_c1 = c1
+            board.chan[0] = []
+            for c2 in board.chan[1]:
+                outlet_c2.push_sample([last_chan2])
+                last_c2 = c2
+            board.chan[1] = []
+            print last_c1, last_c2
+            
     finally:
-        if hrm:
+        if board:
             # way get ""
             try:
-                hrm.disconnect()
+                board.disconnect()
                 print "disconnected"
             except:
                 # may get "ValueError: need more than 1 value to unpack"??
