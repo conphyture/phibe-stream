@@ -1,6 +1,4 @@
-# credits to code from: https://github.com/IanHarvey/bluepy/issues/53
-
-# TODO: get all RR values?
+# borrowed some code from OpenBCI repo...
 
 from bluepy.bluepy.btle import Peripheral, ADDR_TYPE_RANDOM, AssignedNumbers
 from pylsl import StreamInfo, StreamOutlet
@@ -12,73 +10,128 @@ parser = argparse.ArgumentParser(description='Stream phibe channels using LSL.')
 parser.add_argument("device_mac", help="MAC address of the MAC device")
 args = parser.parse_args()
 
-# ugly global variable go retrieve value from delegate
-last_chan1 = 0
-last_chan2 = 0
-
 # will likely interpolate data if greater than 1Hz
-samplingrate = 128
+samplingrate = 64
+
+# start of data packet
+START_BYTE = 0xA0
 
 # create LSL StreamOutlet
-print "creating LSL outlet for channel 1, sampling rate:", samplingrate, "Hz"
-info_c1 = StreamInfo('hr','hr',1,samplingrate,'float32','conphyture-phibe-c1')
-outlet_c1 = StreamOutlet(info_c1, max_buffered=1)
-
-print "creating LSL outlet for channel 2, sampling rate:", samplingrate, "Hz"
-info_c2 = StreamInfo('rr','rr',1,samplingrate,'float32','conphyture-phibe-c2')
-outlet_c2 = StreamOutlet(info_c2, max_buffered=1)
+print "creating LSL outlet sampling rate:", samplingrate, "Hz"
+info_phibe = StreamInfo('phi','phi',2,samplingrate,'float32','conphyture-phibe')
+outlet_phibe = StreamOutlet(info_phibe, max_buffered=1)
 
 class Board(Peripheral):
     def __init__(self, addr):
         # list of channels
         self.nbChans = 2
-        self.chan = []
-        # init channels
-        # TODO: numpy...
-        for i in range(self.nbChans):
-            self.chan.append([])
+        self.buffer = ''
         # current position
         self.head = 0
-        self.leftover = ''
+        self.samples = []
+        self.read_state = 0
 
         print "connecting to device", addr
         Peripheral.__init__(self, addr)
         print "...connected"
 
-    def advanceHead(self):
-        self.head += 1
-        if self.head >= self.nbChans:
-            self.head = 0
+    # read n data from buffer -- if overflow, fill with 0
+    # TODO: better overflow check
+    def read(self, n):
+      if self.head + n > len(self.buffer):
+           print "Warning: buffer overflow" 
+           return '0'*n
+      b = self.buffer[self.head:self.head+n]
+      self.head += n
+      return b
 
+    # empty buffer until current head position
+    def cleanup(self):
+      self.buffer=self.buffer[self.head:-1]
+      self.head = 0
+
+    # reset head position
+    def reset(self):
+      self.head = 0
+
+    # how much left in buffer
+    def getBufferSize(self):
+        return len(self.buffer) - self.head
+
+    # TODO
+    def checkCRC(self, crc, packet_id, channel_data):
+        return True
+
+    """
+    Parses buffer packet into PhiBeSample.
+    Incoming Packet Structure:
+    Start Byte(1)|Sample ID(1)|Channel Data(24)|CRC(1)
+    0xA0|0-255|2, 3-byte signed ints|1 byte
+    """
+    def parse(self, max_bytes_to_skip=3000):
+
+        for rep in xrange(max_bytes_to_skip):
+
+          #Looking for start and save id when found
+          if self.read_state == 0:
+            # FIXME: preemptive overflow check
+            if self.getBufferSize() < 9:
+              return
+            b = self.read(1)
+            if struct.unpack('B', b)[0] == START_BYTE:
+              if(rep != 0):
+                print "Skipped", rep, "bytes before start found"
+              packet_id = struct.unpack('B', self.read(1))[0] #packet id goes from 0-255
+
+              self.read_state = 1
+
+          elif self.read_state == 1:
+            channel_data = []
+            for c in xrange(self.nbChans):
+
+              #3 byte ints
+              literal_read = self.read(3)
+              myInt = to32(literal_read) 
+              channel_data.append(myInt)
+
+            self.read_state = 2;
+
+          elif self.read_state == 2:
+            crc = struct.unpack('B', self.read(1))[0]
+            if self.checkCRC(crc, packet_id, channel_data):
+              sample = PhiBeSample(packet_id, channel_data)
+              self.read_state = 0 #read next packet
+              return sample
+            else:
+              print "Warning: Wrong CRC, discarded packet with id", packet_id
+
+    # pushing (and processing) data to buffer
     def addData(self, cHandle,data):
 
-        
-       
         # complete with previous values and reset
-        data = self.leftover + data
+        self.buffer = self.buffer + data
 
-        nb_bytes = len(data)
-        bytes_left = nb_bytes % 3
+        # useless to parse anything if not enough data
+        while self.getBufferSize() >= 9:
+           print len(data), "new,", self.head, "/", len(self.buffer)
+           sample = self.parse(len(self.buffer))
+           if not sample:
+               self.reset()
+               print "reset"
+               break
+           else:
+               print "add"
+               self.cleanup()
+               self.samples.append(sample)
 
-        # hotfix against wrong "packets"
-        if bytes_left != 0:
-            self.head = 0
-            self.leftover = ''
-            return
 
-        for i in range(0, nb_bytes - bytes_left, 3):
-            dat = data[i:i+3]
-            self.chan[self.head].append(to32(dat))
+class PhiBeSample(object):
+  """Object encapulsating a single sample from the PhiBe board."""
+  def __init__(self, packet_id, channel_data):
+    self.id = packet_id;
+    self.channel_data = channel_data;
 
-            print self.head,
-            for c in dat:
-                print "%#x" % ord(c),
-            print
-            
-            self.advanceHead()
-        # add cut to buffer
-        self.leftover = data[-bytes_left:]
-
+        
 # takes a tab of 3 bytes, return int
 # (from OpenBCI python repo)
 def to32(packed):
@@ -98,26 +151,17 @@ if __name__=="__main__":
 
         board = Board(args.device_mac)
         # enable something??
-        board.writeCharacteristic(0x0025, '\1\0', False)  
+        # board.writeCharacteristic(0x0025, '\1\0', False)  
 
-        t0=time.time()
         board.delegate.handleNotification = board.addData
 
-        last_c1 = 0
-        last_c2 = 0
- 
         while True:
             board.waitForNotifications(1./samplingrate)
             # ugly way to stream and free board current buffer
-            for c1 in board.chan[0]:
-                last_c1 = c1
-            board.chan[0] = []
-            outlet_c1.push_sample([last_c1])
-            for c2 in board.chan[1]:
-                last_c2 = c2
-            board.chan[1] = []
-            outlet_c2.push_sample([last_c2])
-            print last_c1, last_c2
+            for s in board.samples:
+                print "push sample: ", s.id, "values:", s.channel_data
+                outlet_phibe.push_sample(s.channel_data)
+            board.samples = []
             
     finally:
         if board:
