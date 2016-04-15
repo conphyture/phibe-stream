@@ -121,7 +121,7 @@ class Board(Peripheral):
                break
            else:
                print "add"
-               self.cleanup()
+               #self.cleanup()
                self.samples.append(sample)
 
 
