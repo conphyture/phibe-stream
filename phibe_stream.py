@@ -17,16 +17,16 @@ last_chan1 = 0
 last_chan2 = 0
 
 # will likely interpolate data if greater than 1Hz
-samplingrate = 100 
+samplingrate = 128
 
 # create LSL StreamOutlet
 print "creating LSL outlet for channel 1, sampling rate:", samplingrate, "Hz"
 info_c1 = StreamInfo('hr','hr',1,samplingrate,'float32','conphyture-phibe-c1')
-outlet_c1 = StreamOutlet(info_c1)
+outlet_c1 = StreamOutlet(info_c1, max_buffered=1)
 
 print "creating LSL outlet for channel 2, sampling rate:", samplingrate, "Hz"
 info_c2 = StreamInfo('rr','rr',1,samplingrate,'float32','conphyture-phibe-c2')
-outlet_c2 = StreamOutlet(info_c2)
+outlet_c2 = StreamOutlet(info_c2, max_buffered=1)
 
 class Board(Peripheral):
     def __init__(self, addr):
@@ -58,11 +58,14 @@ class Board(Peripheral):
         data = self.leftover + data
 
         nb_bytes = len(data)
-
-        print "nb", nb_bytes
         bytes_left = nb_bytes % 3
-        print "left", bytes_left
-        print "read", nb_bytes - bytes_left
+
+        # hotfix against wrong "packets"
+        if bytes_left != 0:
+            self.head = 0
+            self.leftover = ''
+            return
+
         for i in range(0, nb_bytes - bytes_left, 3):
             dat = data[i:i+3]
             self.chan[self.head].append(to32(dat))
@@ -107,13 +110,13 @@ if __name__=="__main__":
             board.waitForNotifications(1./samplingrate)
             # ugly way to stream and free board current buffer
             for c1 in board.chan[0]:
-                outlet_c1.push_sample([c1])
                 last_c1 = c1
             board.chan[0] = []
+            outlet_c1.push_sample([last_c1])
             for c2 in board.chan[1]:
-                outlet_c2.push_sample([last_chan2])
                 last_c2 = c2
             board.chan[1] = []
+            outlet_c2.push_sample([last_c2])
             print last_c1, last_c2
             
     finally:
