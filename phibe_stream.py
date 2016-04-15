@@ -47,7 +47,7 @@ class Board(Peripheral):
 
     # empty buffer until current head position
     def cleanup(self):
-      self.buffer=self.buffer[self.head:-1]
+      self.buffer=self.buffer[self.head:]
       self.head = 0
 
     # reset head position
@@ -117,11 +117,10 @@ class Board(Peripheral):
            sample = self.parse(len(self.buffer))
            if not sample:
                self.reset()
-               print "reset"
                break
            else:
-               print "add"
-               #self.cleanup()
+               # we got samples, moving forward to buffer
+               self.cleanup()
                self.samples.append(sample)
 
 
