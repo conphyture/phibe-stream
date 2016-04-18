@@ -81,6 +81,7 @@ class Board(Peripheral):
             if struct.unpack('B', b)[0] == START_BYTE:
               if(rep != 0):
                 print "Skipped", rep, "bytes before start found"
+              # FIXME: check packet number
               packet_id = struct.unpack('B', self.read(1))[0] #packet id goes from 0-255
 
               self.read_state = 1
@@ -113,7 +114,6 @@ class Board(Peripheral):
 
         # useless to parse anything if not enough data
         while self.getBufferSize() >= 9:
-           print len(data), "new,", self.head, "/", len(self.buffer)
            sample = self.parse(len(self.buffer))
            if not sample:
                self.reset()
